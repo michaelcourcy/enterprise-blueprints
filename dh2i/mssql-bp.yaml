@@ -1,0 +1,145 @@
+apiVersion: cr.kanister.io/v1alpha1
+kind: Blueprint
+metadata:
+  name: mssql-bp
+  namespace: kasten-io
+actions:
+  backup:
+    phases:
+    - func: KubeExec
+      name: backupDatabase
+      objects:
+        mssqlSecret:
+          kind: Secret
+          name: mssql
+          namespace: '{{ .Object.metadata.namespace }}' 
+      args:
+        namespace: "{{ .Object.metadata.namespace }}"
+        pod: "{{ .Object.metadata.name }}-0"
+        container: mssql-tools
+        command:
+        - bash
+        - -x
+        - -o
+        - errexit
+        - -o
+        - pipefail
+        - -c
+        - |
+          # create the dir /backup/current and /backup/previous if they do not exist
+          mkdir -p /backup/current
+          mkdir -p /backup/previous
+          # this depends on the load balancer that you created 
+          # using the listener is mandatory for ensuring we are working with the primary instance
+          HOST="dxemssql-cluster-lb,14033"
+          USER="sa"
+          PASSWORD="{{ index .Phases.backupDatabase.Secrets.mssqlSecret.Data "MSSQL_SA_PASSWORD" | toString }}"
+          # but I need also the non primary instance let's grap the @@servername to get the primary instance name
+          PRIMARY_INSTANCE=$(/opt/mssql-tools/bin/sqlcmd -S $HOST -U $USER -P $PASSWORD -Q "SET NOCOUNT ON; SELECT @@servername" -b -s "," -h -1)
+          numInstances=$(({{ .Object.spec.synchronousReplicas }}))
+          NON_PRIMARY_INSTANCE="Not Defined"
+          # loop on numInstances to get the non primary instances
+          for i in $(seq 1 $numInstances); do
+            # get the non primary instance name
+            INSTANCE={{ .Object.metadata.name }}-$i
+            if [ "$INSTANCE" != "$PRIMARY_INSTANCE" ]; then
+              NON_PRIMARY_INSTANCE=$INSTANCE
+              break
+            fi            
+          done
+          NON_PRIMARY_HOST=$NON_PRIMARY_INSTANCE
+          echo "Non primary instance selected: $NON_PRIMARY_INSTANCE"
+          # get the databases that are not system databases
+          databases=$(/opt/mssql-tools/bin/sqlcmd -S $HOST -U $USER -P $PASSWORD -Q "SET NOCOUNT ON; SELECT name FROM sys.databases WHERE name NOT IN ('master','model','msdb','tempdb')" -b -s "," -h -1)
+          # Loop through each database if the /backup/current/$database.bak exists then move it to /backup/previous/${database}.bak
+          # and create a log backup for the database
+          for database in $databases; do
+            # we only backup the database if it is part of the availability group
+            inAvailabilityGroup=$(/opt/mssql-tools/bin/sqlcmd -S $HOST -U $USER -P $PASSWORD -Q "SET NOCOUNT ON; SELECT name FROM sys.databases WHERE name = '$database' AND replica_id IS NOT NULL" -b -s "," -h -1)
+            if [ -n "$inAvailabilityGroup" ]; then
+              # if a backup already exists then we are not at the first backup and we can create a new log backup and move the full backup to the previous directory
+              if [ -f /backup/current/$database.bak ]; then
+                # create a new log backup
+                if [ -f /backup/current/$database.trn ]; then
+                  rm /backup/current/$database.trn 
+                fi
+                /opt/mssql-tools/bin/sqlcmd -S $NON_PRIMARY_HOST -U $USER -P $PASSWORD -Q "BACKUP LOG $database TO DISK = '/backup/current/$database.trn'"
+                # move the full backup to the previous directory
+                mv /backup/current/$database.bak /backup/previous/${database}.bak
+              fi
+              # in all cases create a new full backup for the database the WITH COPY_ONLY is mandatory because we execute on non primary instance
+              /opt/mssql-tools/bin/sqlcmd -S $NON_PRIMARY_HOST -U $USER -P $PASSWORD -Q "BACKUP DATABASE $database TO DISK = '/backup/current/$database.bak' WITH COPY_ONLY"
+            else
+              echo "Skipping database $database because it is not part of the availability group."
+            fi
+          done          
+  restore:
+    phases:
+    - func: KubeTask
+      name: waitForDXToBeReady
+      args:
+        # this image contain kubectl and jq
+        image: michaelcourcy/kasten-tools:7.5.1
+        command:
+          - bash
+          - -o
+          - errexit
+          - -o
+          - pipefail
+          - -c
+          - |
+            timeout=300
+            while true; do
+              timeout=$((timeout-5))
+              expectedNumInstances=$(({{ .Object.spec.synchronousReplicas }}+{{ .Object.spec.asynchronousReplicas }}))
+              numReadyInstances=$(kubectl get pods -n {{ .Object.metadata.namespace }} -o json | jq '[.items[] | select(.status.conditions[] | select(.type == "Ready" and .status == "True"))] | length')
+              if [ $numReadyInstances -ge $expectedNumInstances ]; then
+                echo "All instances are ready."
+                sleep 30
+                exit 0
+              fi
+              sleep 5            
+            done
+            echo "Timed out waiting for all instances to be ready."
+            exit 1
+    - func: KubeExec
+      name: restoreDatabase
+      objects:
+        mssqlSecret:
+          kind: Secret
+          name: mssql
+          namespace: '{{ .Object.metadata.namespace }}' 
+      args:
+        namespace: "{{ .Object.metadata.namespace }}"
+        pod: "{{ .Object.metadata.name }}-0"
+        container: mssql-tools
+        command:
+        - bash
+        - -x
+        - -o
+        - errexit
+        - -o
+        - pipefail
+        - -c
+        - |
+          # this depends on the load balancer that you created 
+          # using the listener is mandatory for ensuring we are working with the primary instance
+          HOST="dxemssql-cluster-lb,14033"
+          AVAILABILITY_GROUP="{{ .Object.spec.availabilityGroupName }}"
+          USER="sa"
+          PASSWORD="{{ index .Phases.restoreDatabase.Secrets.mssqlSecret.Data "MSSQL_SA_PASSWORD" | toString }}"
+          # Loop in the /backup/current/ directory and restore the database
+          for file in /backup/current/*.bak; do
+            database=$(basename $file .bak)
+            # check if the database already exists
+            exists=$(/opt/mssql-tools/bin/sqlcmd -S $HOST -U $USER -P $PASSWORD -Q "SET NOCOUNT ON; SELECT name FROM sys.databases WHERE name = '$database'" -b -s "," -h -1)
+            if [ -n "$exists" ]; then
+              # check if the database is in the availability group, if yes remove it from the availability group because restoring a database that belongs to an availabilty group is impossible
+              inAvailabilityGroup=$(/opt/mssql-tools/bin/sqlcmd -S $HOST -U $USER -P $PASSWORD -Q "SET NOCOUNT ON; SELECT name FROM sys.databases WHERE name = '$database' AND replica_id IS NOT NULL" -b -s "," -h -1)
+              if [ -n "$inAvailabilityGroup" ]; then
+                /opt/mssql-tools/bin/sqlcmd -S $HOST -U $USER -P $PASSWORD -Q "ALTER AVAILABILITY GROUP $AVAILABILITY_GROUP REMOVE DATABASE $database;"                
+              fi
+            fi
+            /opt/mssql-tools/bin/sqlcmd -S $HOST -U $USER -P $PASSWORD -Q "RESTORE DATABASE $database FROM DISK = '$file' WITH REPLACE, RECOVERY"
+            /opt/mssql-tools/bin/sqlcmd -S $HOST -U $USER -P $PASSWORD -Q "ALTER AVAILABILITY GROUP $AVAILABILITY_GROUP ADD DATABASE $database;"            
+          done
