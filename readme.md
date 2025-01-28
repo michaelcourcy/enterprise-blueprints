@@ -95,3 +95,4 @@ The Enterprise Blueprints repository builds upon Kanister while integrating Kast
 - A GUI with authentication and authorization
 
 …and more.
+

@@ -5,7 +5,7 @@
 
 An architecture reference that explains how to use the DH2I MSSQL operator and Kasten by Veeam together.
 
-D2H2I operator creates MSSQL Availability group and listeners on kubernetes for High Availability and failover MSSQL database.
+DH2I operator creates MSSQL Availability group and listeners on kubernetes for High Availability and failover MSSQL database.
 
 ## Architecture card
 
@@ -70,8 +70,8 @@ Make sure you understand the limitations of this architecture reference.
      +---------------------------+                |                                               |
                     ^                             |                                               |
                     |                             | Restore databases                             |
-   Backup All PVCs  |                             | on primary:/backup/                           |
-   Restore All PVCs |                             |                                               |
+Backup only bck PVC |                             | on primary:/backup/                           |
+Restore only bck PVC|                             |                                               |
                     |                   +---------------------+                                   |
                     +-------------------|  Kasten K10         |-------------------+---------------+
                                         |  Backup & Restore   |
@@ -88,10 +88,11 @@ Make sure you understand the limitations of this architecture reference.
 - The DH2I operator deploy a MSSQL cluster by creating a group of instance with an availability group. The operator will also create 2 PVCs per instance.
 - We create a **single** shared pvc backup mounted on each instance on the path /backup
 - When Kasten Backup it does 2 operations 
-   1. It creates a backup of the databases on the backup pvc 
-   2. It back up all the pvc including the backup pvc 
+   1. It creates the backups of the databases on the backup PVC
+   2. It back up only the backup PVC that contains backup files
 - When Kasten Restore it does 2 operations 
-   1. It restore all the PVCs including the backup pvc
+   1. It restore only the backup PVC
+   2. Operator recreate the database PVCs 
    2. It restore all the database from the backup pvc
 
 
@@ -117,7 +118,7 @@ kubectl config set-context --current --namespace=mssql
 Create license and sa secret replace the LICENSE with your license number.
 ```
 kubectl create secret generic mssql --from-literal=MSSQL_SA_PASSWORD='MyP@SSw0rd1!'
-kubectl create secret generic dxe --from-literal=DX_PASSKEY='MyP@SSw0rd1!' --from-literal=DX_LICENSE=WPFC-Z36O-BGSP-ERRH
+kubectl create secret generic dxe --from-literal=DX_PASSKEY='MyP@SSw0rd1!' --from-literal=DX_LICENSE=WPFC-Z36O-BGPS-ERRH
 ```
 
 Create a custom mssql.conf
@@ -514,50 +515,7 @@ INSERT INTO Sales.MyTable (Name) VALUES ('John Doe');
 select * from Sales.MyTable;
 ```
 
-Now use Kasten and create a policy with an export for the namespace mssql. 
-```
-kind: Policy
-apiVersion: config.kio.kasten.io/v1alpha1
-metadata:
-  name: mssql-backup
-  namespace: kasten-io  
-spec:
-  frequency: "@hourly"
-  retention:
-    hourly: 4
-  selector:
-    matchExpressions:
-      - key: k10.kasten.io/appNamespace
-        operator: In
-        values:
-          - mssql
-  actions:
-    - action: backup
-      backupParameters:
-        filters:
-          excludeResources:
-            - resource: persistentvolumeclaims
-              matchExpressions:
-                - key: dh2i.com/entity
-                  operator: In
-                  values:
-                    - dxesqlag
-        profile:
-          name: se-lab
-          namespace: kasten-io
-    - action: export
-      exportParameters:
-        frequency: "@hourly"
-        profile:
-          name: se-lab
-          namespace: kasten-io
-        exportData:
-          enabled: true
-      retention: {}
-
-```
-
-
+Now use Kasten to create a backup + export policy for the namespace mssql. 
 
 When the backup is finished delete namespace mssql
 ```
@@ -568,17 +526,32 @@ Then go to the remote restore point and simply click restore.
 
 The restore should be successful and you should be able to retreive the data you just created.
 
+> **Note:** We are using the remote the restore point instead of the local restore point because when we deleted the namespace we 
+> deleted also the volumesnapshot that are attached to this namespace. If you want to test the restore of a local restore point do not 
+> delete the mssql namespace but simply delete the DxEnterpriseSqlAg custom resource and all the pvc 
+> ```
+> kubectl delete DxEnterpriseSqlAg --all -n mssql
+> kubectl delete pvc --all -n mssql
+> ```
+> then click restore. The restore should take less time because you restore from local snapshot
+
 
 # Use a Kasten blueprint to take full and log backup
 
-The unsafe backup and restore we did above worked well because the database was not under heavy use. But on production 
-SQL Server keeps active transactions and uncommitted data in memory. A snapshot taken without coordinating 
-with SQL Server might lead to an inconsistent state. We need to quiet the disk and depending of your volumes
-and your storage technology this operation can be long.
+The unsafe backup and restore we did above worked well because the database was not under heavy use. 
+But on production SQL Server keeps active transactions and uncommitted data in memory. 
+A snapshot taken without coordinating with SQL Server might lead to an inconsistent state. 
 
-To guarantee consistency of our backup we're going to use the `BACKUP DATABASE` command.
+This is the objective of [T-SQL snapshot](https://learn.microsoft.com/en-us/sql/relational-databases/backup-restore/create-a-transact-sql-snapshot-backup?view=sql-server-ver16). However this is not the path we are taking here for three reasons :
+- this feature is only available on MSSQL server 2022 
+- We could not find clear documentation about handling Availability group with T-SQL Snapshot (should we do the snapshot on the primary or read instance and if so what is the process for restoring)
+- There is a strong need for PIT restore and this kind of backup does not support PIT 
 
-Also backing up the transaction log in SQL Server is crucial for ensuring point-in-time recovery.
+To guarantee consistency of our backup we're going to use a combination of  `BACKUP DATABASE` and 
+`BACKUP LOG` command to support PIT.
+
+We make the maximum to take the backup on a read replica and not on the primary instance to not impact 
+the performance of the applications that are using this database.
 
 1. The first backup will be created in the `/backup/current` directory with the name of the database for instance `/backup/current/AdventureWorks2022.bak`
 2. The second backup will : 
@@ -588,8 +561,9 @@ Also backing up the transaction log in SQL Server is crucial for ensuring point-
     - create a `.bak` backup file with the name of the database for instance `/backup/current/AdventureWorks2022.bak`
 3. The next backup will repeat the steps in 2 if a `.bak` file already exists in the `/backup` directory
 
-When you'll need to restore you will restore as in the basic backup then you can use the backup file to restore in a 
-point in time. 
+When you'll need to restore you will restore the `.bak` file in the `current` directory. And this is how the restore action is by default implemented in the blueprint.
+
+But if you need to restore on a specific PIT then you'll have to do it manually. First execute the restore with kastend and manuall restore the `.bak` file in the `previous` directory and use the `.trn` file to restore with a PIT. 
 
 For instance let's imagine you have a 2 hours frequency backup we create this succeeding backups 
 ```
@@ -627,19 +601,14 @@ RESTORE DATABASE AdventureWorks2022 WITH RECOVERY;
 ALTER AVAILABILITY GROUP AG1 ADD DATABASE AdventureWorks2022;
 ```
 
-We did not automate this process in the blueprint because all the possible use cases can make the code of the blueprint too complex. 
-Hence this operation must be done manually.
-
 # Create the blueprint
 
 ## Important 
 
-We provide an example blueprint implementing the strategy described above but the customer or the customer partner must 
-adapt this strategy to its unique use case. It is very important to run extensive test of backup and restore before moving to production.
+We provide an example blueprint implementing the strategy described above but the customer or the customer's
+partner must adapt this strategy to its unique use case. It is very important to run extensive test of backup
+ and restore before moving to production.
 
-## Implementation 
-
-The blueprint implement the stategy described in more details above. 
 
 ## Install
 
@@ -648,49 +617,14 @@ kubectl create -f mssql-bp.yaml
 kubectl create -f mssql-bp-binding.yaml
 ```
 
-The binding ensure that any time Kasten will backup a DxEnterpriseSqlAg object in the namespace it will apply the blueprint.
+The binding ensure that any time Kasten will backup a DxEnterpriseSqlAg object it will apply the blueprint.
 
-Now you don't need to backup the pvc anymore 
-```
-kind: Policy
-apiVersion: config.kio.kasten.io/v1alpha1
-metadata:
-  name: mssql-backup
-  namespace: kasten-io  
-spec:
-  frequency: "@hourly"
-  retention:
-    hourly: 4
-  selector:
-    matchExpressions:
-      - key: k10.kasten.io/appNamespace
-        operator: In
-        values:
-          - mssql
-  actions:
-    - action: backup
-      backupParameters:
-        filters:
-          excludeResources:
-            - resource: persistentvolumeclaims
-              matchExpressions:
-                - key: dh2i.com/entity
-                  operator: In
-                  values:
-                    - dxesqlag
-        profile:
-          name: se-lab
-          namespace: kasten-io
-    - action: export
-      exportParameters:
-        frequency: "@hourly"
-        profile:
-          name: se-lab
-          namespace: kasten-io
-        exportData:
-          enabled: true
-      retention: {}
-```
+> **Important:** Now that the blueprint is handling the backup of the databases you only need to backup 
+> the `backup` PVC and you can avoid the other PVC (created by the operator). A simple way for doing 
+> that is to use in your policy an exclude filter on the PVC with the label `dh2i.com/entity:dxesqlag`.
+> with this filter only the `backup` PVC will be protected and restored, the other PVC will be recreated 
+> automatically by the operator.
+
 
 ## test PIT (Point In Time) restore
 
@@ -699,7 +633,7 @@ For testing we are going to insert every 10 seconds a new entry in the `Sales.My
 
 Create the pod inserter 
 ```
-kubectl create -f insterter.yaml 
+kubectl create -f inserter.yaml 
 ```
 
 if you logs the inserter pod 
@@ -713,7 +647,7 @@ You should have an ouput like this one
 + /opt/mssql-tools/bin/sqlcmd -S dxemssql-cluster-lb,14033 -U sa -P 'MyP@SSw0rd1!' -d AdventureWorks2022 -Q 'INSERT INTO Sales.MyTable (Name) VALUES ('\''John Doe'\'');'
 
 (1 rows affected)
-+ sleep 1
++ sleep 10
 + true
 + /opt/mssql-tools/bin/sqlcmd -S dxemssql-cluster-lb,14033 -U sa -P 'MyP@SSw0rd1!' -d AdventureWorks2022 -Q 'INSERT INTO Sales.MyTable (Name) VALUES ('\''John Doe'\'');'
 
@@ -725,7 +659,7 @@ You should have an ouput like this one
 
 ### Execute a PIT restore 
 
-Ensure that you have an hourly policy and that 2 subsequent backup run successfully.
+Ensure that you have an hourly policy and that 2 subsequent backupsrun successfully.
 
 1. delete the namespace 
 ```
@@ -757,3 +691,19 @@ use AdventureWorks2022;
 select * from Sales.MyTable;
 ```
 And make sure they are consistent with your `STOPAT ` value.
+
+# Conclusion 
+
+Building an enterprise blueprint is always a tradeoff where yous final choices will be directed by your 
+specific conditions. 
+
+With this enterprise blueprint we get the following : 
+- High availability for MSSQL database with fail over 
+- Backup on secondary to avoid performance impact on application during backup
+- Full restore automation with Kasten 
+- Manual PIT restore after a full restore
+
+But we don't get backup based on storage snapshot because support for T-SQL snapshot with Availibilty Group 
+still need to be clarified. However you can restore the `backup` PVC from a snapshot which is avoiding 
+downloading it from a backup location (S3, Azure blob container ...) and that will speed up your restore
+process.
