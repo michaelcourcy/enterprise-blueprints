@@ -27,7 +27,7 @@ DH2I operator creates MSSQL Availability group and listeners on kubernetes for H
 
 # Limitations 
 
-Make sure you understand the limitations of this architecture reference.
+Make sure you understand the limitations of this architecture reference:
 
 - PIT restore is only possible between 2 backups not after the last backup.
 - PIT restore must be done manually after a regular restore complete. The procedure is fully described in this document.
@@ -87,18 +87,18 @@ Restore only bck PVC|                             |                             
 
 - The DH2I operator deploy a MSSQL cluster by creating a group of instance with an availability group. The operator will also create 2 PVCs per instance.
 - We create a **single** shared pvc backup mounted on each instance on the path /backup
-- When Kasten Backup it does 2 operations 
-   1. It creates the backups of the databases on the backup PVC
-   2. It back up only the backup PVC that contains backup files
-- When Kasten Restore it does 2 operations 
-   1. It restore only the backup PVC
+- When backup happens: 
+   1. Kasten creates the backups of the databases on the backup PVC
+   2. Kasten back up only the backup PVC that contains backup files
+- When restore happens
+   1. Kasten restore only the backup PVC
    2. Operator recreate the database PVCs 
-   2. It restore all the database from the backup pvc
+   2. Kasten restore all the database from the backup pvc
 
 
 # Install the operator
 
-The steps described in the [dh2i documentation](https://support.dh2i.com/dxoperator/guides/dxoperator-qsg/) :
+The steps are described in the [dh2i documentation](https://support.dh2i.com/dxoperator/guides/dxoperator-qsg/) :
 
 ```
 wget https://dxoperator.dh2i.com/dxesqlag/files/v1-cu2.yaml
@@ -106,8 +106,6 @@ kubectl apply -f v1-cu2.yaml
 ```
 
 # Create a  DxEnterpriseSqlAg mssql cluster with an availability group 
-
-> **Notice**: all the sql statement should be followed by a GO statement to be executed in `sqlcmd` mode.
 
 Create the namespace for your installation
 ```
@@ -318,7 +316,7 @@ Now you can exit by simply typing exit
 exit
 ```
 
-# Create an alias to connect to the listener through the client 
+# Create an alias to connect to the listener 
 
 For simplicity let's create an alias that will connect to the listener through the first pod.
 
@@ -334,6 +332,12 @@ dx
 1>
 ```
 
+When you connect to the listener host you actually connect to the primary. Therefore a 
+simple way to know who's the primary is to execute `select @@servername` 
+
+If it's you first install you most likely get `dxesqlag-0`, but after the fail over scenario you could
+have `dxesqlag-1` or `dxesqlag-2`
+
 # Let's install the AdventureWorks2022 database in the availability group
 
 first find who's the primary, because adding a database to the availability group require to be on the primary.
@@ -342,7 +346,7 @@ select @@servername
 ```
 The listener always connect to the primary, hence `@@servername` will give you the primary.
 
-Suppose you find dxesqlag-0
+Suppose you find `dxesqlag-0`
 
 Let's install the AdventureWorks2022 database by executing command from the mssql-tools container
 ```
@@ -470,13 +474,13 @@ Sqlcmd: Error: Microsoft ODBC Driver 13 for SQL Server : Unable to access availa
 As you can see the database was unavailable for just few seconds and then the listener fail over another replica that became  the primary.
 It is also possible that you don't even see the error message above if the fail over was done within the 1 second sleep.
 
-Let's use the find-primary.sql script to find out who's the primary.
+Let's find who's the primary now, use dx to connect to the listener and execute  
 ```
-kubectl cp find-primary.sql dxesqlag-1:/backup/find-primary.sql
-kubectl exec dxesqlag-1 -c mssql-tools -it -- /opt/mssql-tools/bin/sqlcmd -S dxemssql-cluster-lb,14033 -U sa -P 'MyP@SSw0rd1!' -i /backup/find-primary.sql
+select @@servername
 ```
 
-You can read that DXESQLAG-1 is now the primary instead of DXESQLAG-0.
+You should get `dxesqlag-1`or `dxesqlag-2`
+
 
 # Unsafe backup and restore
 
@@ -489,12 +493,14 @@ from Kasten (freeze/flush or logical dump) by just backing up using the standard
 
 Short answer : No !!
 
-Long answer : Database are designed to restart after a power cut or a machine failure by using WAL (Write Ahead Log) file. Kasten take crash consistent  
-(or time consistent if you prefer) backup. Hence when you restore your workload with Kasten most of the time they restarts. But database vendor recommand 
-doing pre (flush+lock) and post (unlock) operation before taking a backup to make sure there that dirty pages are not creating recovery errors.
+Long answer : Database are designed to restart after a power cut or a machine failure by using WAL 
+(Write Ahead Log) file. Kasten take crash consistent backup. Hence when you restore your workload 
+with Kasten most of the time they restarts. But database vendor recommand doing pre (flush+lock) 
+and post (unlock) operation before taking a backup to make sure that there is no dirty pages that 
+could create recovery errors.
 
-Some database like elasticsearch does not even support storage snapshots because transaction span on multiple nodes. In this case you can only use the 
-recommanded method of the database vendor.
+Some database like elasticsearch does not even support storage snapshots because transaction span on
+multiple nodes. In this case you can only use the recommanded method of the database vendor.
 
 **With unsafe backup and restore your workload may restart but silent data loss can occur with no error message to let you know.**
 
@@ -533,7 +539,8 @@ The restore should be successful and you should be able to retreive the data you
 > kubectl delete DxEnterpriseSqlAg --all -n mssql
 > kubectl delete pvc --all -n mssql
 > ```
-> then click restore. The restore should take less time because you restore from local snapshot
+> then click restore on the local restore point. The restore should take less time because you 
+> restore from local snapshot.
 
 
 # Use a Kasten blueprint to take full and log backup
@@ -563,7 +570,7 @@ the performance of the applications that are using this database.
 
 When you'll need to restore you will restore the `.bak` file in the `current` directory. And this is how the restore action is by default implemented in the blueprint.
 
-But if you need to restore on a specific PIT then you'll have to do it manually. First execute the restore with kastend and manuall restore the `.bak` file in the `previous` directory and use the `.trn` file to restore with a PIT. 
+But if you need to restore on a specific PIT then you'll have to do it manually. First execute the restore with kasten and manually restore the `.bak` file in the `previous` directory and use the `.trn` file to restore with a PIT. 
 
 For instance let's imagine you have a 2 hours frequency backup we create this succeeding backups 
 ```
@@ -596,7 +603,7 @@ For restoring a database at 11:32 you also restore the 12:00 kasten `restorepoin
 ```
 ALTER AVAILABILITY GROUP AG1 REMOVE DATABASE AdventureWorks2022;
 RESTORE DATABASE AdventureWorks2022 FROM DISK = '/backup/previous/AdventureWorks2022.bak' WITH NORECOVERY, REPLACE;
-RESTORE LOG AdventureWorks2022 FROM DISK = '/backup/current/AdventureWorks2022.trn' WITH NORECOVERY, STOPAT = '2025-01-05T20:32:00';
+RESTORE LOG AdventureWorks2022 FROM DISK = '/backup/current/AdventureWorks2022.trn' WITH NORECOVERY, STOPAT = '2025-01-05T11:32:00';
 RESTORE DATABASE AdventureWorks2022 WITH RECOVERY;
 ALTER AVAILABILITY GROUP AG1 ADD DATABASE AdventureWorks2022;
 ```
@@ -626,7 +633,7 @@ The binding ensure that any time Kasten will backup a DxEnterpriseSqlAg object i
 > automatically by the operator.
 
 
-## test PIT (Point In Time) restore
+## Test PIT (Point In Time) restore
 
 ### Create a client that insert data every 10 seconds 
 For testing we are going to insert every 10 seconds a new entry in the `Sales.MyTable` table
@@ -659,15 +666,15 @@ You should have an ouput like this one
 
 ### Execute a PIT restore 
 
-Ensure that you have an hourly policy and that 2 subsequent backupsrun successfully.
+Ensure that you have an hourly policy and that 2 subsequent backups ran successfully.
 
 1. delete the namespace 
 ```
 kubectl delete ns mssql 
 ```
 
-2. restore the last remote hourly backup but exclude the inserter pod to not create extra data at restore.
-Check the last entries in the Sales.MyTables with the `dx` alias described above
+2. restore the last remote hourly backup but exclude the inserter pod to not create extra data after restore complete.
+Check the last entries in the table Sales.MyTables with the `dx` alias described above.
 ```
 use AdventureWorks2022;
 select * from Sales.MyTable;
