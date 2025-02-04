@@ -18,9 +18,9 @@ DH2I operator creates MSSQL Availability group and listeners on kubernetes for H
 | Operator vendor validation                    | In progress                      |                           |
 | Operator version tested                       | docker.io/dh2i/dxoperator:1.0    |                           |
 | High Availability                             | Yes                              | The database must be added to the Availability group see install AdaventureWorks2022 example <br> a failover test scenario is proposed |
-| Unsafe backup & restore without pods errors   | Yes                              | See unsafe backup and restore section |
-| PIT (Point In Time) supported                 | Yes                              | See the limitation section |
-| Blueprint and BlueprintBinding example        | Yes                              | See the limitation section |
+| Unsafe backup & restore without pods errors   | Yes                              | See [unsafe backup and restore](#unsafe-backup-and-restore) section |
+| PIT (Point In Time) supported                 | Yes                              | See the [limitation](#limitations) section |
+| Blueprint and BlueprintBinding example        | Yes                              | See the [limitation](#limitations) section |
 | Blueprint actions                             | Backup & restore                 | Delete is done through restorepoint deletion as backup artifacts are living in a shared PVC |
 | Backup performance impact on the database     | None                             | Backup done on secondary replica |
 
