@@ -125,7 +125,7 @@ cat <<EOF | kubectl create -f -
 apiVersion: v1
 kind: ConfigMap
 metadata:
-    name: mssql-config
+    name: mssql-config    
 data: 
     mssql.conf: |
      [EULA]
@@ -270,7 +270,7 @@ spec:
 EOF
 ```
 
-Connect to the database from the first pod
+Wait for all pods to be ready and connect to the database from the first pod
 ```
 kubectl exec -it dxesqlag-0 -c mssql-tools -- /opt/mssql-tools/bin/sqlcmd -S localhost -U sa -P 'MyP@SSw0rd1!'
 ```
@@ -601,6 +601,7 @@ This will be the default behaviour of the blueprint so you won't need to do it m
 
 For restoring a database at 11:32 you also restore the 12:00 kasten `restorepoint` but now you execute 
 ```
+use master;
 ALTER AVAILABILITY GROUP AG1 REMOVE DATABASE AdventureWorks2022;
 RESTORE DATABASE AdventureWorks2022 FROM DISK = '/backup/previous/AdventureWorks2022.bak' WITH NORECOVERY, REPLACE;
 RESTORE LOG AdventureWorks2022 FROM DISK = '/backup/current/AdventureWorks2022.trn' WITH NORECOVERY, STOPAT = '2025-01-05T11:32:00';
@@ -683,13 +684,17 @@ The date of the last entries should match the date of your restorepoint.
 
 3. enter the mssql-tools container with the `dx` alias command and execute the restore of the previous backup 
 ```
-RESTORE DATABASE AdventureWorks2022 FROM DISK = '/backup/previous/AdventureWorks2022.bak' WITH NORECOVERY;
+use master;
+ALTER AVAILABILITY GROUP AG1 REMOVE DATABASE AdventureWorks2022;
+RESTORE DATABASE AdventureWorks2022 FROM DISK = '/backup/previous/AdventureWorks2022.bak' WITH NORECOVERY, REPLACE;
 ```
 
 4. restore the PIT 
 Adapt the date to your situation
 ```
-RESTORE LOG AdventureWorks2022 FROM DISK = '/backup/current/AdventureWorks2022.trn' WITH RECOVERY, STOPAT = '2025-12-03T11:32:00';
+RESTORE LOG AdventureWorks2022 FROM DISK = '/backup/current/AdventureWorks2022.trn' WITH RECOVERY, STOPAT = '2025-01-05T11:32:00';
+ALTER DATABASE AdventureWorks2022 SET RECOVERY FULL;
+ALTER AVAILABILITY GROUP AG1 ADD DATABASE AdventureWorks2022;
 ```
 
 5. Control the last entries in the  table Sales.MyTable
@@ -697,7 +702,56 @@ RESTORE LOG AdventureWorks2022 FROM DISK = '/backup/current/AdventureWorks2022.t
 use AdventureWorks2022;
 select * from Sales.MyTable;
 ```
-And make sure they are consistent with your `STOPAT ` value.
+And make sure they are consistent with your `STOPAT` value.
+
+# Deployment and resource consideration for backup
+
+> **About general consideration for MSSQL server** : How you configure resource 
+> (CPU, RAM, Network and storage) for running MSQL with availibility group is 
+> beyond the scope of this guide. DH2I has an expertise in this field and can 
+> advise you. In this guide we only consider the backup and resource use case 
+> not the "current" run.
+
+We advise to deploy the database DxEnterpriseSqlAg custom resource in its dedicated namespace. 
+
+It's possible to deploy 2 DxEnterpriseSqlAg custom resources  in the same namespace but if you need to 
+restore them at different moment you'll have to be more carefull when picking up 
+elements in the granular restore. Deleting the namespace and restoring it by just clicking
+restore is very convenient. After all that's the role of a namespace : avoid name collision.
+
+By using a dedicated namespace you'll be able to apply more easily node selector and 
+resource quota which is often necessary for databases. 
+
+When you back up an MSSQL database using the BACKUP DATABASE command, the primary resource 
+considerations involve disk I/O, network throughput, and temporary storage, rather than CPU 
+or RAM. 
+
+## Disk
+
+- Backups are disk-intensive operations because the database engine reads data from the source 
+storage and writes it to the backup destination.
+- Ensure your backup destination (e.g., local disk, SAN, or network share) has high I/O capacity 
+to handle the workload without becoming a bottleneck.
+- Use fast storage such as SSDs for the backup destination if possible.
+
+## Network Throughput
+
+- If you are backing up to a remote location (e.g., a network share or cloud storage), network 
+bandwidth is crucial.
+- Slow network speeds can significantly increase the backup duration.
+
+## Temporary Storage (for Compression/Encryption):
+
+- If you use backup compression or encryption, MSSQL may need additional temporary storage for 
+intermediate data. Plan for extra disk space on the server where the backup is executed.
+
+# Migration 
+
+You can migrate your database with a regular Kasten migration workflow. You only need to ensure 
+that prior to the migration : 
+- the operator is installed as described in the section [Install the operator](#install-the-operator).
+- the blueprint and blueprintbinding are recreated as described in [](#)
+ 
 
 # Conclusion 
 
