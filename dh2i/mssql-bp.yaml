@@ -5,6 +5,12 @@ metadata:
   namespace: kasten-io
 actions:
   backup:
+    # The backup action requires an input artifact
+    # even if you don't use it 
+    outputArtifacts:
+      mssqlCloudDump:
+        keyValue:
+          foo: "bar"
     phases:
     - func: KubeExec
       name: backupDatabase
@@ -63,17 +69,21 @@ actions:
                 if [ -f /backup/current/$database.trn ]; then
                   rm /backup/current/$database.trn 
                 fi
-                /opt/mssql-tools/bin/sqlcmd -S $NON_PRIMARY_HOST -U $USER -P $PASSWORD -Q "BACKUP LOG $database TO DISK = '/backup/current/$database.trn'"
+                /opt/mssql-tools/bin/sqlcmd -S $NON_PRIMARY_HOST -U $USER -P $PASSWORD -Q "BACKUP LOG $database TO DISK = '/backup/current/$database.trn'" -b
                 # move the full backup to the previous directory
                 mv /backup/current/$database.bak /backup/previous/${database}.bak
               fi
               # in all cases create a new full backup for the database the WITH COPY_ONLY is mandatory because we execute on non primary instance
-              /opt/mssql-tools/bin/sqlcmd -S $NON_PRIMARY_HOST -U $USER -P $PASSWORD -Q "BACKUP DATABASE $database TO DISK = '/backup/current/$database.bak' WITH COPY_ONLY"
+              /opt/mssql-tools/bin/sqlcmd -S $NON_PRIMARY_HOST -U $USER -P $PASSWORD -Q "BACKUP DATABASE $database TO DISK = '/backup/current/$database.bak' WITH COPY_ONLY" -b
             else
               echo "Skipping database $database because it is not part of the availability group."
             fi
           done          
   restore:
+    # The restore action requires an input artifact
+    # even if you don't use it
+    inputArtifactNames:
+      - mssqlCloudDump
     phases:
     - func: KubeTask
       name: waitForDXToBeReady
@@ -128,18 +138,18 @@ actions:
           AVAILABILITY_GROUP="{{ .Object.spec.availabilityGroupName }}"
           USER="sa"
           PASSWORD="{{ index .Phases.restoreDatabase.Secrets.mssqlSecret.Data "MSSQL_SA_PASSWORD" | toString }}"
-          # Loop in the /backup/current/ directory and restore the database
+          echo "Loop in the /backup/current/ directory and restore the database"
           for file in /backup/current/*.bak; do
             database=$(basename $file .bak)
-            # check if the database already exists
+            echo "check if the database $database already exists"
             exists=$(/opt/mssql-tools/bin/sqlcmd -S $HOST -U $USER -P $PASSWORD -Q "SET NOCOUNT ON; SELECT name FROM sys.databases WHERE name = '$database'" -b -s "," -h -1)
             if [ -n "$exists" ]; then
               # check if the database is in the availability group, if yes remove it from the availability group because restoring a database that belongs to an availabilty group is impossible
               inAvailabilityGroup=$(/opt/mssql-tools/bin/sqlcmd -S $HOST -U $USER -P $PASSWORD -Q "SET NOCOUNT ON; SELECT name FROM sys.databases WHERE name = '$database' AND replica_id IS NOT NULL" -b -s "," -h -1)
               if [ -n "$inAvailabilityGroup" ]; then
-                /opt/mssql-tools/bin/sqlcmd -S $HOST -U $USER -P $PASSWORD -Q "ALTER AVAILABILITY GROUP $AVAILABILITY_GROUP REMOVE DATABASE $database;"                
+                /opt/mssql-tools/bin/sqlcmd -S $HOST -U $USER -P $PASSWORD -Q "ALTER AVAILABILITY GROUP $AVAILABILITY_GROUP REMOVE DATABASE $database;" -b               
               fi
             fi
-            /opt/mssql-tools/bin/sqlcmd -S $HOST -U $USER -P $PASSWORD -Q "RESTORE DATABASE $database FROM DISK = '$file' WITH REPLACE, RECOVERY"
-            /opt/mssql-tools/bin/sqlcmd -S $HOST -U $USER -P $PASSWORD -Q "ALTER AVAILABILITY GROUP $AVAILABILITY_GROUP ADD DATABASE $database;"            
+            /opt/mssql-tools/bin/sqlcmd -S $HOST -U $USER -P $PASSWORD -Q "RESTORE DATABASE $database FROM DISK = '$file' WITH REPLACE, RECOVERY" -b
+            /opt/mssql-tools/bin/sqlcmd -S $HOST -U $USER -P $PASSWORD -Q "ALTER AVAILABILITY GROUP $AVAILABILITY_GROUP ADD DATABASE $database;" -b            
           done
