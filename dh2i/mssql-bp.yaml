@@ -202,7 +202,8 @@ actions:
               numReadyInstances=$(kubectl get pods -n {{ .Object.metadata.namespace }} -o json | jq '[.items[] | select(.status.conditions[] | select(.type == "Ready" and .status == "True"))] | length')
               if [ $numReadyInstances -ge $expectedNumInstances ]; then
                 echo "All instances are ready."
-                sleep 60
+                echo "However wait for 90 secondes to ensure that each servers are really ready and not only the pods."
+                sleep 90 
                 exit 0
               fi
               sleep 5            

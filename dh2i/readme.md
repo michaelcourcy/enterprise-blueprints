@@ -652,15 +652,22 @@ Now select the desired restore point and click restore.
 # Restoring the database at a specific point in time (PIT)
 
 If you follow the [deployment recommandation](#deployment-and-resource-consideration-for-backup) you have created the database in a dedicated namespace. 
-You delete it and recreate it with the same name. In this new empty namespace create a configmap pit-restore where you specify the PIT. 
+
+You delete it and recreate it with the same name. In this new empty namespace create a configmap pit-restore where you specify the PIT in UTC time. 
 
 ```
-kubectl create configmap pit-restore --from-literal=date='2025-01-05T11:32:00' 
+kubectl create configmap pit-restore --from-literal=date='2025-02-12T04:32:12' 
 ```
 
 > **Important** the time used here is UTC. Do not forget to translate the desired time to UTC.
+> For instance if you're time is UTC+3 and you want to restore at 2025-02-12T07:32:12 you will look for the 
+> 7:45 restorepoint in the Kasten Dashboard (because the Kasten dashboard is always aligned to your timezone)
+> ![Restore point at 7:45 in UTC+3 time zone](./images/restorePointUTCPlus3%20.png)
+> but inside this restorepoint the last log backup is actually 4:45 (7-3=4) so you will create the configmap accordingly 
+> ```
+> kubectl create configmap pit-restore --from-literal=date='2025-02-12T04:32:12'
+> ``` 
 
-Now select the **closest later** restore point (the restore point that is just after the pit date), in our example it will the 2025-01-05T11:45:00 kasten `restorepoint`. 
 
 To lauch the PIT restore just click restore.
 
