@@ -116,7 +116,7 @@ kubectl config set-context --current --namespace=mssql
 Create license and sa secret replace the LICENSE with your license number.
 ```
 kubectl create secret generic mssql --from-literal=MSSQL_SA_PASSWORD='MyP@SSw0rd1!'
-kubectl create secret generic dxe --from-literal=DX_PASSKEY='MyP@SSw0rd1!' --from-literal=DX_LICENSE=WPFC-Z36O-BGPS-ERRH
+kubectl create secret generic dxe --from-literal=DX_PASSKEY='MyP@SSw0rd1!' --from-literal=DX_LICENSE=WPFC-Z36O-BGSP-ERRH
 ```
 
 Create a custom mssql.conf
@@ -555,56 +555,127 @@ This is the objective of [T-SQL snapshot](https://learn.microsoft.com/en-us/sql/
 - There is a strong need for PIT restore and this kind of backup does not support PIT 
 
 To guarantee consistency of our backup we're going to use a combination of  `BACKUP DATABASE` and 
-`BACKUP LOG` command to support PIT.
+`BACKUP LOG` command to support PIT with the ability to run multiple log backup before doing a full backup.
 
-We make the maximum to take the backup on a read replica and not on the primary instance to not impact 
+## Full and Log backup sequence
+
+The number of log backups before doing a full backup is controlled by an annotation on the DxEnterpriseSqlAg custom resources.
+The blueprint also track the number of log backup already done by updating the annotation 
+
+```
+metadata:
+  ...
+  annotations:
+    kasten.io/numLogBackupsBeforeFullBackup: 4
+    kasten.io/counterLogBackups: 0
+```
+
+You can setup and even change the value of `kasten.io/numLogBackupsBeforeFullBackup` when creating the object DxEnterpriseSqlAg or 
+when installing the blueprint but you should not change or setup the value of `kasten.io/counterLogBackups` because this annotation is managed by the blueprint.
+
+## Let's work on a frequency instance to better understand 
+
+Let's assume you want to take a full backup every hour and do a log backup every 15 minutes. This is a common backup strategy with mssql backup.
+
+The solution is to create a kasten hourly policy with a subfrequency every 15 minutes and setup numLogBackupsBeforeFullBackup to 4.
+
+After 1 full backup and 4 logs backup, 1 hour has passed we take a new full backup.
+
+## Folder organisation and backup workflow 
+
+### Overview
+We organize the backup workflow around 2 folders `current` and `previous`. The full and log backups are always performed in the `current`
+directory but when we perform a new full backup `current` is renamed to `previous` and we recreate the `current` directory. In the subsequent 
+backup `previous` directory will be removed (but `previous` continues to exist in the restore point that was performing a new full backup).
+
+
+To better understand this organisation of the restore point let's assume want to take a full backup every hour and a log backup every 15 minutes.
+
+For doing that we'll setup an hourly policy with a 15 minutes subfrequency we also setup `numLogBackupsBeforeFullBackup`to 4. 
+
+Now here is how the restore point will look : 
+
+![Representations of the restore points](./images/restorepoints.png)
+
+* If you want to restore at 2025-01-05T11:22:00 then you'll use the 2025-01-05T11:30:00 restore point 
+* If you want to restore at 2025-01-05T12:06:00 then you'll use the 2025-01-05T12:15:00 restore point 
+* But if you want tos restore at 2025-01-05T11:52:00 you'll use the previous directory of the 2025-01-05T12:00:00 restore point 
+
+
+The impact on the target backup location profile is limited because kopia (the datamover) is fully incremental and won't upload files that already exist in the repository. 
+
+By keeping only the full backup and the subsequent logs backups we avoid the backup pvc to grow indefinitely.
+The backup pvc capacity must be at least 3 times the size of all the full backup of each databases. 
+
+We said at least 3 times because we must handle the `previous` full backup and its chain of logs backup plus the new `current` full backup. 
+
+But if there is a lot of changes then the total logs backup can be bigger than the full log backup and you should allocate more than 3 times.
+
+
+### If I just want to restore the restorepoint
+
+If you just want to restore the restorepoint then you just click restore and the blueprint will restore using full backup and the subsequent log backup that 
+he will find in the `current` directory. 
+
+### Algorithm breakdown for backup
+
+If you need to change the blueprint here is a quick explaination of the algorithm : 
+
+0. If `counterLogBackups` annotation does not exist then set it up to 0, if `numLogBackupsBeforeFullBackup` annotation does not exist then set it up to 24.
+
+1. Remove any database folder that are not anymore in the availability group
+
+2. If a `previous` directory exist remove it
+
+3. If `counterLogBackups` is greater than 0 we create a new log backup in `current` (or a full backup if no full backup already exist) and increment `counterLogBackups` 
+
+4. if `counterLogBackups` equals `numLogBackupsBeforeFullBackup` we rename `current` to `previous` and set `counterLogBackups` to 0
+
+5. if `counterLogBackups` equals 0 we create an empty `current` directory, do a full backup in `current` and set `counterLogBackups` to 1
+
+
+This sequence of actions is executed before kasten capture the backup pvc and is applied on each database folder. 
+
+
+# Performance consideration
+
+We alway take the backup on a read replica and not on the primary instance to not impact 
 the performance of the applications that are using this database.
 
-1. The first backup will be created in the `/backup/current` directory with the name of the database for instance `/backup/current/AdventureWorks2022.bak`
-2. The second backup will : 
-    - move the `.bak` file in the `/backup/previous` directory for instnace `/backup/previous/AdventureWorks2022.bak`
-    - remove the old `.trn` log file with the name of the database if it exists, for instance `/backup/current/AdventureWorks2022.trn`
-    - create a new `.trn` log file with the name of the database, for instance `/backup/current/AdventureWorks2022.trn`
-    - create a `.bak` backup file with the name of the database for instance `/backup/current/AdventureWorks2022.bak`
-3. The next backup will repeat the steps in 2 if a `.bak` file already exists in the `/backup` directory
+# Restoring the database at a specific restorepoint
 
-When you'll need to restore you will restore the `.bak` file in the `current` directory. And this is how the restore action is by default implemented in the blueprint.
+If you follow the [deployment recommandation](#deployment-and-resource-consideration-for-backup) you have created the database in a dedicated namespace. 
+You delete it and recreate it with the same name. 
 
-But if you need to restore on a specific PIT then you'll have to do it manually. First execute the restore with kasten and manually restore the `.bak` file in the `previous` directory and use the `.trn` file to restore with a PIT. 
+Now select the desired restore point and click restore.
 
-For instance let's imagine you have a 2 hours frequency backup we create this succeeding backups 
+# Restoring the database at a specific point in time (PIT)
+
+If you follow the [deployment recommandation](#deployment-and-resource-consideration-for-backup) you have created the database in a dedicated namespace. 
+You delete it and recreate it with the same name. In this new empty namespace create a configmap pit-restore where you specify the PIT. 
+
 ```
-- 08:00 
-  - /backup/current/AdventureWorks2022.bak  (08:00)
-- 10:00
-  - /backup/current/AdventureWorks2022.trn  (10:00)
-  - /backup/previous/AdventureWorks2022.bak (08:00)
-  - /backup/current/AdventureWorks2022.bak  (10:00)
-- 12:00
-  - /backup/current/AdventureWorks2022.trn  (12:00)
-  - /backup/previous/AdventureWorks2022.bak (10:00)
-  - /backup/current/AdventureWorks2022.bak  (12:00)
-- 14:00 
-  - /backup/current/AdventureWorks2022.trn  (14:00)
-  - /backup/previous/AdventureWorks2022.bak (12:00)
-  - /backup/current/AdventureWorks2022.bak  (14:00)
+kubectl create configmap pit-restore --from-literal=date='2025-01-05T11:32:00' 
 ```
 
-For restoring the database at 12:00 you restore the 12:00 kasten `restorepoint` 
+> **Important** the time used here is UTC. Do not forget to translate the desired time to UTC.
+
+Now select the **closest later** restore point (the restore point that is just after the pit date), in our example it will the 2025-01-05T11:45:00 kasten `restorepoint`. 
+
+To lauch the PIT restore just click restore.
+
+
+## What happens in the blueprint 
+
+this is what the blueprint do during restore.
+
 ```
 use master;
 ALTER AVAILABILITY GROUP AG1 REMOVE DATABASE AdventureWorks2022;
-RESTORE DATABASE AdventureWorks2022 FROM DISK = '/backup/current/AdventureWorks2022.bak' WITH REPLACE;
-ALTER AVAILABILITY GROUP AG1 ADD DATABASE AdventureWorks2022;
-```
-This will be the default behaviour of the blueprint so you won't need to do it manually. 
-
-For restoring a database at 11:32 you also restore the 12:00 kasten `restorepoint` but now you execute 
-```
-use master;
-ALTER AVAILABILITY GROUP AG1 REMOVE DATABASE AdventureWorks2022;
-RESTORE DATABASE AdventureWorks2022 FROM DISK = '/backup/previous/AdventureWorks2022.bak' WITH NORECOVERY, REPLACE;
-RESTORE LOG AdventureWorks2022 FROM DISK = '/backup/current/AdventureWorks2022.trn' WITH NORECOVERY, STOPAT = '2025-01-05T11:32:00';
+RESTORE DATABASE AdventureWorks2022 FROM DISK = '/backup/current/AdventureWorks2022-2025-01-05T11:00:00.bak' WITH NORECOVERY, REPLACE;
+RESTORE LOG AdventureWorks2022 FROM DISK = '/backup/current/AdventureWorks2022-2025-01-05T11:15:00.trn' WITH NORECOVERY, REPLACE;
+RESTORE LOG AdventureWorks2022 FROM DISK = '/backup/current/AdventureWorks2022-2025-01-05T11:30:00.trn' WITH NORECOVERY, REPLACE;
+RESTORE LOG AdventureWorks2022 FROM DISK = '/backup/current/AdventureWorks2022-2025-01-05T11:45:00.trn' WITH NORECOVERY, STOPAT = '2025-01-05T11:32:00';
 RESTORE DATABASE AdventureWorks2022 WITH RECOVERY;
 ALTER AVAILABILITY GROUP AG1 ADD DATABASE AdventureWorks2022;
 ```
@@ -615,7 +686,7 @@ ALTER AVAILABILITY GROUP AG1 ADD DATABASE AdventureWorks2022;
 
 We provide an example blueprint implementing the strategy described above but the customer or the customer's
 partner must adapt this strategy to its unique use case. It is very important to run extensive test of backup
- and restore before moving to production.
+and restore before moving to production.
 
 
 ## Install
@@ -665,45 +736,6 @@ You should have an ouput like this one
 + /opt/mssql-tools/bin/sqlcmd -S dxemssql-cluster-lb,14033 -U sa -P 'MyP@SSw0rd1!' -d AdventureWorks2022 -Q 'INSERT INTO Sales.MyTable (Name) VALUES ('\''John Doe'\'');'
 ```
 
-### Execute a PIT restore 
-
-Ensure that you have an hourly policy and that 2 subsequent backups ran successfully.
-
-1. delete the namespace 
-```
-kubectl delete ns mssql 
-```
-
-2. restore the last remote hourly backup but exclude the inserter pod to not create extra data after restore complete.
-Check the last entries in the table Sales.MyTables with the `dx` alias described above.
-```
-use AdventureWorks2022;
-select * from Sales.MyTable;
-```
-The date of the last entries should match the date of your restorepoint.
-
-3. enter the mssql-tools container with the `dx` alias command and execute the restore of the previous backup 
-```
-use master;
-ALTER AVAILABILITY GROUP AG1 REMOVE DATABASE AdventureWorks2022;
-RESTORE DATABASE AdventureWorks2022 FROM DISK = '/backup/previous/AdventureWorks2022.bak' WITH NORECOVERY, REPLACE;
-```
-
-4. restore the PIT 
-Adapt the date to your situation
-```
-RESTORE LOG AdventureWorks2022 FROM DISK = '/backup/current/AdventureWorks2022.trn' WITH RECOVERY, STOPAT = '2025-01-05T11:32:00';
-ALTER DATABASE AdventureWorks2022 SET RECOVERY FULL;
-ALTER AVAILABILITY GROUP AG1 ADD DATABASE AdventureWorks2022;
-```
-
-5. Control the last entries in the  table Sales.MyTable
-```
-use AdventureWorks2022;
-select * from Sales.MyTable;
-```
-And make sure they are consistent with your `STOPAT` value.
-
 # Deployment and resource consideration for backup
 
 > **About general consideration for MSSQL server** : How you configure resource 
@@ -712,7 +744,7 @@ And make sure they are consistent with your `STOPAT` value.
 > advise you. In this guide we only consider the backup and resource use case 
 > not the "current" run.
 
-We advise to deploy the database DxEnterpriseSqlAg custom resource in its dedicated namespace. 
+## We advise to deploy the database DxEnterpriseSqlAg custom resource in its dedicated namespace
 
 It's possible to deploy 2 DxEnterpriseSqlAg custom resources  in the same namespace but if you need to 
 restore them at different moment you'll have to be more carefull when picking up 
@@ -751,7 +783,30 @@ You can migrate your database with a regular Kasten migration workflow. You only
 that prior to the migration : 
 - the operator is installed as described in the section [Install the operator](#install-the-operator).
 - the blueprint and blueprintbinding are recreated as described in [](#)
- 
+
+
+# Common troubleshooting and repair
+
+Sometime after several fail some of the participant may not be in a healthy state.
+
+You can discover this with this command : 
+
+```
+select  * from  sys.dm_hadr_availability_replica_states;
+```
+
+We get this output (we removed some of the columns)
+```
+9BFF...A-8B7D2C28AFDB        0    2 SECONDARY   NULL   CONNECTED   NULL    NOT_HEALTHY 
+5655...A-8B7D2C28AFDB        0    2 SECONDARY   NULL   CONNECTED   NULL    NOT_HEALTHY 
+DDA0...A-8B7D2C28AFDB        1    1 PRIMARY     ONLINE CONNECTED   ONLINE  HEALTHY     
+```
+
+It shows that only the last pod was healthy. 
+You may have to investigate further to check why the pods are unhealthy.
+
+In our case the simple thing we had to do was deleting the unhealthy pod and the operator
+recreate them and they were healthy. 
 
 # Conclusion 
 
