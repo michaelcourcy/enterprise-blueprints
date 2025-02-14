@@ -642,6 +642,17 @@ Also if you want to reduce the size of storage taken for the backup you can excl
 
 ![Add a label explude filter on pvc](./images/label-pvc-exclude-filter.png)
 
+```
+        filters:
+          excludeResources:
+            - resource: persistentvolumeclaims
+              matchExpressions:
+                - key: dh2i.com/entity
+                  operator: In
+                  values:
+                    - dxesqlag
+```
+
 We don't need them anymore because we restore from the full and log backups that we created in the backup pvc. 
 
 You can also reduce the local retention of the backup pvc to zero and you will only restore from the remote restorepoint.
