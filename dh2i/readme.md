@@ -327,7 +327,7 @@ For simplicity let's create an alias that will connect to the listener through t
 alias dx="kubectl exec dxesqlag-0 -c mssql-tools -it -- /opt/mssql-tools/bin/sqlcmd -S dxemssql-cluster-lb,14033 -U sa -P 'MyP@SSw0rd1\!'"
 ```
 
-Notice the Host : `-S dxemssql-cluster-lb,14033`
+Notice the Host : `-S dxemssql-cluster-lb,14033` which is the name of the listener service.
 
 The only thing you have to do now is to simply type `dx`
 ```
@@ -388,7 +388,7 @@ SELECT COUNT(*) FROM Person.Person;
 ```
 
 
-In order to add the AdventureWorks2022 database in availabilty group you need to take a backup first so that the database switch if full recovery mode. 
+In order to add the AdventureWorks2022 database in the availabilty group you need to swithc first in full recovery mode and take a backup. 
 
 ```
 ALTER DATABASE AdventureWorks2022 SET RECOVERY FULL;
@@ -401,8 +401,6 @@ Now we can add the database to the availability group
 use master;
 ALTER AVAILABILITY GROUP AG1 ADD DATABASE AdventureWorks2022;
 ```
-
-> **Note**: `use master;` is mandatory to add a database on the availability group.
 
 Now you can check that the database has been replicated on every nodes.
 Exit from the sqlcmd and the container and execute: 
@@ -496,23 +494,16 @@ from Kasten (freeze/flush or logical dump) by just backing up using the standard
 
 Short answer : No !!
 
-Long answer : Database are designed to restart after a power cut or a machine failure by using WAL 
-(Write Ahead Log) file. Kasten take crash consistent backup. Hence when you restore your workload 
-with Kasten most of the time they restarts. But database vendor recommand doing pre (flush+lock) 
-and post (unlock) operation before taking a backup to make sure that there is no dirty pages that 
-could create recovery errors.
-
-Some database like elasticsearch does not even support storage snapshots because transaction span on
-multiple nodes. In this case you can only use the recommanded method of the database vendor.
+Long answer : Database are designed to restart after a crash and Kasten take crash consistent backup. Hence the quality of your 
+restore will be similar to a restart after a crash.
 
 **With unsafe backup and restore your workload may restart but silent data loss can occur with no error message to let you know.**
 
 ## So what's the point with unsafe backup and restore ? 
 
 If you don't have the time to implement a blueprint for your database, unsafe backup and restore is always better than nothing ... 
-Actually it's far better than nothing. But this is not ideal.
-
-Also having an immediate successful unsafe backup and restore is a good sign of the operator and database robustness. In this matter DH2I is robust.
+Actually it's far better than nothing. But your backup may be dirty and you'll see it just after a restart. It's why later we will use 
+our extension mechanism (blueprint) to take proper backups.
 
 ## Testing Unsafe backup and restore 
 
