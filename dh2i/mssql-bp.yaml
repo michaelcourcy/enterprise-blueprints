@@ -39,7 +39,7 @@ actions:
             # if numLogBackupsBeforeFullBackup is equal to counterLogBackups we should reset the counter
             # for the final phase of the action if all previous phases were successfull
             fullBackup=false
-            if [ $numLogBackupsBeforeFullBackup -eq $counterLogBackups ]; then
+            if [ $numLogBackupsBeforeFullBackup -le $counterLogBackups ]; then
               fullBackup=true
             fi
             # kando output this values for the next phase

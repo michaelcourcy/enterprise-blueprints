@@ -632,11 +632,19 @@ This behaviour is for the default hourly policy, it will create a full backup ev
 This sequence of actions is executed before kasten capture the backup pvc and is applied on each database folder. 
 
 
-# Performance consideration
+# Performance and storage consideration
 
 We alway take the backup on a read replica and not on the primary instance to not impact 
 the performance of the applications that are using this database. Bedide most of the time we 
 take log backup which require less resource than a full backup.
+
+Also if you want to reduce the size of storage taken for the backup you don't need to backup the workload pvc by just adding a label exclude filter 
+![Add a label explude filter on pvc](./images/label-pvc-exclude-filter.png). We don't need them anymore because we restore from 
+the full and log backups. 
+
+You can also reduce the local retention of the backup pvc to zero and you will only restore from the remote restorepoint.
+![Local retention to zero](./images/no-local-retention.png)
+
 
 # A classic 15 Minutes RPO scenario 
 
