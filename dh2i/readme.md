@@ -810,8 +810,7 @@ You should have an ouput like this one
 > **About general consideration for MSSQL server** : How you configure resource 
 > (CPU, RAM, Network and storage) for running MSQL with availibility group is 
 > beyond the scope of this guide. DH2I has an expertise in this field and can 
-> advise you. In this guide we only consider the backup and resource use case 
-> not the "current" run.
+> advise you. 
 
 ## We advise to deploy the database DxEnterpriseSqlAg custom resource in its dedicated namespace
 
@@ -851,7 +850,7 @@ intermediate data. Plan for extra disk space on the server where the backup is e
 You can migrate your database with a regular Kasten migration workflow. You only need to ensure 
 that prior to the migration : 
 - the operator is installed as described in the section [Install the operator](#install-the-operator).
-- the blueprint and blueprintbinding are recreated as described in [](#)
+- the blueprint and blueprintbinding are recreated as described in the [Create blueprint section](#create-the-blueprint).
 
 
 # Common troubleshooting and repair
