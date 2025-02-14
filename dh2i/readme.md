@@ -661,8 +661,8 @@ You can also reduce the local retention of the backup pvc to zero and you will o
 
 # A classic 15 Minutes RPO scenario 
 
-Imagine you want to reach 15 minutes RPO, doing a full backup very 15 minutes would not work because it would 
-take too many times and too many storage to do a full backup every 15 minutes. But you can implement this scenario : 
+Imagine you want to reach 15 minutes RPO, doing a full backup every 15 minutes would not work because it would 
+take too many times and too many storage. But you can implement this scenario : 
 - A log backup every 15 inutes
 - A full backup every day 
 
@@ -689,6 +689,10 @@ For this create an Hourly policy with a sufrequency every 15 minutes
 ```
 
 And set up `numLogBackupsBeforeFullBackup` to 96.
+
+```
+kubectl annotate dxenterprisesqlags.dh2i.com dxesqlag kasten.io/numLogBackupsBeforeFullBackup=96 --overwrite 
+```
 
 Every 96*15 minutes = 24 hours a full backup will happen while a log backup is executed every quater.
 
