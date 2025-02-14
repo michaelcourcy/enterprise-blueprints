@@ -527,7 +527,7 @@ Then go to the remote restore point and simply click restore.
 The restore should be successful and you should be able to retreive the data you just created.
 
 > **Note:** We are using the remote the restore point instead of the local restore point because when we deleted the namespace we 
-> deleted also the volumesnapshot that are attached to this namespace. If you want to test the restore of a local restore point do not 
+> deleted also the volumesnapshots that are attached to this namespace. If you want to test the restore of a local restore point do not 
 > delete the mssql namespace but simply delete the DxEnterpriseSqlAg custom resource and all the pvc 
 > ```
 > kubectl delete DxEnterpriseSqlAg --all -n mssql
@@ -616,6 +616,7 @@ he will find in the `current` directory.
 If you need to change the blueprint here is a quick explaination of the algorithm : 
 
 0. If `counterLogBackups` annotation does not exist then set it up to 0, if `numLogBackupsBeforeFullBackup` annotation does not exist then set it up to 24.
+This behaviour is for the default hourly policy, it will create a full backup every day and an hourly log backup (but later we will show other configurations).
 
 1. Remove any database folder that are not anymore in the availability group
 
