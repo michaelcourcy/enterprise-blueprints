@@ -746,6 +746,9 @@ RESTORE DATABASE AdventureWorks2022 WITH RECOVERY;
 ALTER AVAILABILITY GROUP AG1 ADD DATABASE AdventureWorks2022;
 ```
 
+You don't have to take care of this because the blueprint do it for you. However if you need to restore different databases at different PIT you can restore
+as explained above and do manual restore directly from the `sqlcmd` prompt.
+
 # Create the blueprint
 
 ## Important 
@@ -774,16 +777,16 @@ The binding ensure that any time Kasten will backup a DxEnterpriseSqlAg object i
 ## Test PIT (Point In Time) restore
 
 ### Create a client that insert data every 10 seconds 
-For testing we are going to insert every 10 seconds a new entry in the `Sales.MyTable` table
+For testing we are going to insert every 10 seconds a new entry in the `Sales.MyTable` table that [we created above](#testing-unsafe-backup-and-restore)
 
-Create the pod inserter 
+Create the namespace mssql-client and the pod inserter 
 ```
 kubectl create -f inserter.yaml 
 ```
 
 if you logs the inserter pod 
 ```
-kubectl logs inserter 
+kubectl logs inserter -n mssql-client
 ```
 
 You should have an ouput like this one
