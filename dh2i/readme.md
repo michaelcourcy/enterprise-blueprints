@@ -599,7 +599,7 @@ Now here is how the restore point will look :
 
 * If you want to restore at 2025-01-05T11:22:00 then you'll use the 2025-01-05T11:30:00 restore point 
 * If you want to restore at 2025-01-05T12:06:00 then you'll use the 2025-01-05T12:15:00 restore point 
-* But if you want tos restore at 2025-01-05T11:52:00 you'll use the previous directory of the 2025-01-05T12:00:00 restore point 
+* But if you want to restore at 2025-01-05T11:52:00 you'll use the previous directory of the 2025-01-05T12:00:00 restore point 
 
 
 The impact on the target backup location profile is limited because kopia (the datamover) is fully incremental and won't upload files that already exist in the repository. 
@@ -640,14 +640,29 @@ This sequence of actions is executed before kasten capture the backup pvc and is
 # Performance consideration
 
 We alway take the backup on a read replica and not on the primary instance to not impact 
-the performance of the applications that are using this database.
+the performance of the applications that are using this database. Bedide most of the time we 
+take log backup which require less resource than a full backup.
+
+# A classic 15 Minutes RPO scenario 
+
+Imagine you want to reach 15 minutes RPO, doing a full backup very 15 minutes would not work because it would 
+take to many times and too many storage to do a full backup every 15 minutes. But you can implement this scenario : 
+- A log backup every quater
+- A full backup every day 
+
+For this create an Hourly policy with a sufrequency every quater 
+![15 minutes subfrequency](./images/fiftheenMinutesSubfrequency.png)
+And set up `numLogBackupsBeforeFullBackup` to 96.
+
+Every 96*15 minutes = 24 hours a full backup will happen while a log backup is executed every quater.
 
 # Restoring the database at a specific restorepoint
 
 If you follow the [deployment recommandation](#deployment-and-resource-consideration-for-backup) you have created the database in a dedicated namespace. 
-You delete it and recreate it with the same name. 
 
-Now select the desired restore point and click restore.
+Delete the namespace.
+
+Now select the desired restore point and click restore. 
 
 # Restoring the database at a specific point in time (PIT)
 
