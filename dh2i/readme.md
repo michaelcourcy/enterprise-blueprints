@@ -711,6 +711,8 @@ If you follow the [deployment recommandation](#deployment-and-resource-considera
 You delete it and recreate it with the same name. In this new empty namespace create a configmap pit-restore where you specify the PIT in UTC time. 
 
 ```
+kubectl delete ns mssql
+kubectl create ns mssql
 kubectl create configmap pit-restore --from-literal=date='2025-02-12T04:32:12' 
 ```
 
