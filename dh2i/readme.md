@@ -638,8 +638,10 @@ We alway take the backup on a read replica and not on the primary instance to no
 the performance of the applications that are using this database. Bedide most of the time we 
 take log backup which require less resource than a full backup.
 
-Also if you want to reduce the size of storage taken for the backup you don't need to backup the workload pvc by just adding a label exclude filter 
+Also if you want to reduce the size of storage taken for the backup you can exclude the workload pvc by just adding a label exclude filter 
+
 ![Add a label explude filter on pvc](./images/label-pvc-exclude-filter.png)
+
 We don't need them anymore because we restore from the full and log backups that we created in the backup pvc. 
 
 You can also reduce the local retention of the backup pvc to zero and you will only restore from the remote restorepoint.
