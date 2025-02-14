@@ -878,16 +878,11 @@ recreate them and they were healthy.
 
 # Conclusion 
 
-Building an enterprise blueprint is always a tradeoff where yous final choices will be directed by your 
+Building a blueprint is always a tradeoff where your final choices will be directed by your 
 specific conditions. 
 
-With this enterprise blueprint we get the following : 
+With this blueprint we get the following : 
 - High availability for MSSQL database with fail over 
 - Backup on secondary to avoid performance impact on application during backup
-- Full restore automation with Kasten 
-- Manual PIT restore after a full restore
-
-But we don't get backup based on storage snapshot because support for T-SQL snapshot with Availibilty Group 
-still need to be clarified. However you can restore the `backup` PVC from a snapshot which is avoiding 
-downloading it from a backup location (S3, Azure blob container ...) and that will speed up your restore
-process.
+- Full restore automation with Kasten using 
+- Support for PIT restore
