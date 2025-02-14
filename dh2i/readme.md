@@ -17,20 +17,19 @@ DH2I operator creates MSSQL Availability group and listeners on kubernetes for H
 | Operator vendor                               | [DH2I](https://dh2i.com)         | License required          |
 | Operator vendor validation                    | In progress                      |                           |
 | Operator version tested                       | docker.io/dh2i/dxoperator:1.0    |                           |
-| High Availability                             | Yes                              | The database must be added to the Availability group see install AdaventureWorks2022 example <br> a failover test scenario is proposed |
+| High Availability                             | Yes                              | The database must be added to the Availability group see [install AdventureWorks2022 example](#lets-install-the-adventureworks2022-database-in-the-availability-group) <br> a failover test scenario is proposed |
 | Unsafe backup & restore without pods errors   | Yes                              | See [unsafe backup and restore](#unsafe-backup-and-restore) section |
-| PIT (Point In Time) supported                 | Yes                              | See the [limitation](#limitations) section |
-| Blueprint and BlueprintBinding example        | Yes                              | See the [limitation](#limitations) section |
+| PIT (Point In Time) supported                 | Yes                              | See the [limitation](#limitations) section for RPO consideration |
+| Blueprint and BlueprintBinding example        | Yes                              | Only for database that belongs to the availability group, see the [limitation](#limitations) section |
 | Blueprint actions                             | Backup & restore                 | Delete is done through restorepoint deletion as backup artifacts are living in a shared PVC |
-| Backup performance impact on the database     | None                             | Backup done on secondary replica |
+| Backup performance impact on the database     | None                             | Backup is done on secondary replica which has no impact on the primary database |
 
 
 # Limitations 
 
 Make sure you understand the limitations of this architecture reference:
 
-- PIT restore is only possible between 2 backups not after the last backup.
-- PIT restore must be done manually after a regular restore complete. The procedure is fully described in this document.
+- PIT restore is only possible between 2 backups not after the last backup. Hence you still have a RPO that depends on the backup frequency.
 - The Blueprint only backup and restore the database that are belonging to the availability group.
 
 
@@ -89,12 +88,15 @@ Restore only bck PVC|                             |                             
 - We create a **single** shared pvc backup mounted on each instance on the path /backup
 - When backup happens: 
    1. Kasten creates the backups of the databases on the backup PVC
-   2. Kasten back up only the backup PVC that contains backup files
+   2. Kasten back up only the backup PVC that contains backup files (full backup and log backup)
 - When restore happens
-   1. Kasten restore only the backup PVC
+   1. Kasten restore only the backup PVC 
    2. Operator recreate the database PVCs 
-   2. Kasten restore all the database from the backup pvc
+   2. Kasten restore all the database from the backup pvc (executing the full plus all the log backup)
 
+Here is how the backup folder will be at different successive if the number of log backup before full backup is 4 and we do a backup every 15 minutes: 
+
+![Representations of the backup folder](./images/restorepoints.png)
 
 # Install the operator
 
