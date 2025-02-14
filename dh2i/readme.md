@@ -635,7 +635,7 @@ This sequence of actions is executed before kasten capture the backup pvc and is
 # Performance and storage consideration
 
 We alway take the backup on a read replica and not on the primary instance to not impact 
-the performance of the applications that are using this database. Bedide most of the time we 
+the performance of the applications that are using this database. Beside most of the time we 
 take log backup which require less resource than a full backup.
 
 Also if you want to reduce the size of storage taken for the backup you can exclude the workload pvc by just adding a label exclude filter 
