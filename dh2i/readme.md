@@ -502,7 +502,7 @@ restore will be similar to a restart after a crash.
 ## So what's the point with unsafe backup and restore ? 
 
 If you don't have the time to implement a blueprint for your database, unsafe backup and restore is always better than nothing ... 
-Actually it's far better than nothing. But your backup may be dirty and you'll see it just after a restart. It's why later we will use 
+Actually it's far better than nothing. But your backup may be dirty and you'll see it just after a restoration. It's why later we will use 
 our extension mechanism (blueprint) to take proper backups.
 
 ## Testing Unsafe backup and restore 
