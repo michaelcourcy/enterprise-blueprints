@@ -94,7 +94,7 @@ Restore only bck PVC|                             |                             
    2. Operator recreate the database PVCs 
    2. Kasten restore all the database from the backup pvc (executing the full plus all the log backup)
 
-Here is how the backup folder will be at different successive if the number of log backup before full backup is 4 and we do a backup every 15 minutes: 
+Here is how the backup folder will be at successive backup if the number of log backup before full backup is 4 and we do a backup every 15 minutes: 
 
 ![Representations of the backup folder](./images/restorepoints.png)
 
@@ -142,7 +142,8 @@ EOF
 ```
 
 Create a shared pvc for the backup, this pvc must be Read Write many and must be snapshotable which is the case of azure file csi. 
-I you don't have such storageclass available you can use this [solution](https://github.com/kubernetes-csi/csi-driver-nfs) based on a nfs share. 
+I you don't have such storageclass available you can use [nfs-csi-driver](https://github.com/kubernetes-csi/csi-driver-nfs) based on a nfs share and which 
+support volume snapshot. 
 ```
 cat<<EOF | kubectl create -f -
 apiVersion: v1
